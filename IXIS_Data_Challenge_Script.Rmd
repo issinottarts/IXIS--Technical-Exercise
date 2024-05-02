@@ -154,8 +154,8 @@ There are a few conclusions we can take from this:
 
 * Safari and Desktop users had the highest number of rows where all categories 
 were higher 3.5 standard deviations from the mean
-* Safari and mobile were the best combination for a high number of sessions
-* Chrome and Desktop were the best combination for a higher number of transactions
+* Safari and mobile was the best combination for a high number of sessions
+* Chrome and Desktop was the best combination for a higher number of transactions
 and quantity.
 
 
@@ -274,8 +274,8 @@ ggplot(longData, aes(x = value, fill = category)) +
   theme_minimal()
 ```
 
-The raw data appears to follow a poisson distribution, 
-because the data is independent and clustered near the origin.
+The raw data appears to follow a negative-binomial distribution, 
+because the data highly skewed to the right and clustered near the origin.
 
 
 ```{r, include=TRUE}
@@ -466,7 +466,7 @@ ggplot(relative_data, aes(x = Metric_Type, y = Difference_Value, fill = Metric_T
        y = "Relative Difference") +
   scale_y_continuous(labels = scales::percent_format()) +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  theme(axis.text.x = element_text(angle = 50, hjust = 1))
 
 
 ```
@@ -499,7 +499,7 @@ saveWorkbook(wb, "IXIS_Data_Science_Challenge.xlsx", overwrite = TRUE)
 The analysis of user engagement patterns across different browsers and devices highlights several key insights. 
 
 * Desktop usage remains the most popular for website interactions, with Safari and Chrome on desktops showing strong performance in engagement and transactions, respectively. 
-* Seasonal trends indicate that March through June are peak months for user activity. Despite an increase in transactions, there is a notable decline in cart additions, suggesting more decisive purchasing behavior. 
-* The data's Poisson-like distribution points to the independence of events and their concentration near the origin, providing a basis for further predictive modeling. 
+* Seasonal trends indicate that April through June are peak months for user activity. Despite an increase in transactions, there is a notable decline in cart additions, suggesting more decisive purchasing behavior. 
+* The data's negative-binomial-like distribution provides a basis for further predictive modeling. 
 
 These insights should inform strategic enhancements, particularly in optimizing for device-specific experiences and adapting to user behavior trends. 
