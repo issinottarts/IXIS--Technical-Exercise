@@ -1,0 +1,505 @@
+---
+title: "IXIS Data Science Challenge Script"
+author: "Isabelle Stratton"
+date: "2024-04-30"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+---
+
+## 1. Calling Relevant Libraries and Data
+#### Set working directory data directory
+
+```{r}
+# set working directory to the current directory of the script
+
+knitr::opts_knit$set(root.dir = getwd())
+```
+
+#### Load libraries
+
+```{r, include=TRUE, warning=FALSE}
+# Calling tidyverse for transforming and representing our data
+library('openxlsx') # for excel functionality
+library('tidyverse') #For data cleaning and presentation
+```
+
+#### Load data
+
+```{r, include=TRUE}
+# Calling sessionCounts
+sessionCounts <- read.csv("raw_data/DataAnalyst_Ecom_data_sessionCounts.csv")
+# Calling addsToCart
+addsToCart <- read.csv("raw_data/DataAnalyst_Ecom_data_addsToCart.csv")
+```
+
+
+## 2. Data Exploration and Cleaning
+
+#### First we can get a sense of the data and check for null values.
+
+#### Session counts data:
+
+```{r, include=TRUE}
+# Session Counts: 
+glimpse(sessionCounts)
+
+# Session Counts Summary: 
+summary(sessionCounts)
+
+#Check for null values
+if (anyNA(sessionCounts)) {
+  sessionCounts <- na.omit(sessionCounts) # Removes rows with NA values
+  print("NA values found and removed")
+} else {
+  print("No NA values found")
+}
+```
+
+#### Adds to Cart data:
+
+```{r, include=TRUE}
+# Adds to Cart:
+glimpse(addsToCart)
+
+# Adds to Cart Summary:
+summary(addsToCart)
+
+# Check for and handle NA values
+if (anyNA(addsToCart)) {
+  addsToCart <- na.omit(addsToCart) # Removes rows with NA values
+  print("NA values found and removed")
+} else {
+  print("No NA values found")
+}
+```
+
+#### Convert Data Types
+
+
+```{r, include=TRUE}
+# The Browser and Device categories are characters rather than factors 
+# so we will switch them for better data visualization later on.
+sessionCounts$dim_browser <- factor(sessionCounts$dim_browser, levels 
+                                    = names(sort(table(sessionCounts$dim_browser), 
+                                                 decreasing = TRUE)))
+sessionCounts$dim_deviceCategory <- factor(sessionCounts$dim_deviceCategory) 
+
+# The date is also listed as a character so we'll need to switch that to a date class.
+sessionCounts$dim_date <- as.Date(sessionCounts$dim_date, format = "%m/%d/%y")
+```
+
+
+#### Check for Outliers  
+
+We can calculate the z-score to determine the data's relationship to the mean.
+
+```{r, include=TRUE}
+# Calculate Z-scores for each metric
+# Sessions
+sessionCounts$z_scores_sessions <- (sessionCounts$sessions - 
+                                      mean(sessionCounts$sessions)
+                                    ) / sd(sessionCounts$sessions)
+# Transactions
+sessionCounts$z_scores_transactions <- (sessionCounts$transactions - 
+                                          mean(sessionCounts$transactions)
+                                        ) / sd(sessionCounts$transactions)
+# QTY
+sessionCounts$z_scores_QTY <- (sessionCounts$QTY - 
+                                 mean(sessionCounts$QTY)
+                               ) / sd(sessionCounts$QTY)
+
+#Reveal Outliers
+
+# This dataset will include any category row above 3.5 standard deviations from
+# the mean
+outliers <- sessionCounts[sessionCounts$z_scores_sessions > 3.5 | 
+                          sessionCounts$z_scores_transactions > 3.5 | 
+                          sessionCounts$z_scores_QTY > 3.5, ]
+
+# This dataset will only include a row where ALL categories are 
+# above 3.5 standard deviations from the mean.
+outliers_strict <- sessionCounts[sessionCounts$z_scores_sessions > 3.5 & 
+                                 sessionCounts$z_scores_transactions > 3.5 & 
+                                 sessionCounts$z_scores_QTY > 3.5, ]
+
+summary(outliers_strict)
+
+
+# This data set groups session, transaction, and QTY values by browser and
+# category.
+aggregated_data <- sessionCounts %>%
+  group_by(dim_browser, dim_deviceCategory) %>%
+  summarise(
+    Mean_Sessions = mean(sessions),
+    Mean_Transactions = mean(transactions),
+    Mean_QTY = mean(QTY)
+  ) %>%
+  ungroup()
+
+# Finding the highest value combination of device and browser
+top_sessions <- aggregated_data[which.max(aggregated_data$Mean_Sessions), ]
+top_transactions <- aggregated_data[which.max(aggregated_data$Mean_Transactions), ]
+top_qty <- aggregated_data[which.max(aggregated_data$Mean_QTY), ]
+
+# Display results
+top_sessions
+top_transactions
+top_qty
+
+```
+There are a few conclusions we can take from this:
+
+* Safari and Desktop users had the highest number of rows where all categories 
+were higher 3.5 standard deviations from the mean
+* Safari and mobile were the best combination for a high number of sessions
+* Chrome and Desktop were the best combination for a higher number of transactions
+and quantity.
+
+
+
+
+## 3. Data Manipulation and Analysis
+
+Now the simplest way to consolidate Session Counts and Adds to Cart is to 
+merge them by date. The most accurate way to do this is by creating a 
+month and year column for Session Counts to be compatible with Adds to Cart.
+
+The mutate function will add new columns to our Session Counts 
+We will simultaneously add an e-commerce conversion rate column for later
+analysis.
+
+Note that there are some zero values under the Sessions column, which indicates
+a user may not have interacted with the site. We'll set any NaNs to 0 so they
+will not contribute to our summations later on.
+
+```{r, include=TRUE}
+sessionCounts$dim_year <- year(sessionCounts$dim_date)
+
+sessionCounts <- sessionCounts %>%
+  mutate(dim_month = month(dim_date, label = TRUE),
+         ECR = if_else(sessions > 0, transactions / sessions, 0)) 
+
+#It could be important to figure out if there are rows where transactions > 0, 
+#but sessions = 0, this could indicate some kind of error
+
+error_rows <- sessionCounts %>%
+  filter(transactions > 0, sessions == 0) # Filter to find errors
+
+error_rows
+
+# Note that under Adds To Cart, the month is written in numerical form, 
+# for ease of readability, we'll convert this to words. For each numeric month 
+# we'll go in and switch to an abbreviated and ordered factor like in 
+# Session Counts
+
+if("dim_month" %in% names(addsToCart) && is.numeric(addsToCart$dim_month)) {
+  addsToCart <- addsToCart %>%
+    mutate(dim_month = factor(month.abb[dim_month], 
+                              levels = month.abb,
+                              ordered = TRUE))  # Create an ordered factor  
+                                                # Replace month numbers with abb.
+} else {
+  print("dim_month column missing or not numeric")
+}
+# Note that the year column in Session Counts is written as a double data class 
+# so we will convert the year column in Adds To Cart to match.
+
+addsToCart <- addsToCart %>%
+  mutate(dim_year = as.double(dim_year))
+ 
+glimpse(addsToCart)
+glimpse(sessionCounts)
+
+# Now we can merge Session Counts and Adds to Cart
+
+combined_data <- full_join(addsToCart, sessionCounts, 
+                           by = c("dim_month", "dim_year"))
+
+
+# Now we can explore some relationships in the consolidated data
+```
+Note that browsers Maxthon and SeaMonkey may deliver unreliable data to Google 
+Analytics because the user would need to have interacted with the sight to have 
+followed through on a transaction.
+
+We'll want to look at each variable individually to get a thorough understanding of the combined data.
+
+
+
+
+
+
+```{r, include=TRUE}
+# The first three variables will be depicted with histograms 
+# with x-axis == value and y-axis == frequency.
+
+# Sessions histogram
+hist(combined_data$sessions, 
+     main="Histogram of Sessions", 
+     xlab="Sessions", 
+     col="blue", 
+     breaks=50)
+
+# Transactions histogram
+hist(combined_data$transactions, 
+     main="Histogram of Transactions", 
+     xlab="Transactions", 
+     col="red", 
+     breaks=50)
+
+# QTY histogram
+hist(combined_data$QTY, 
+     main="Histogram of QTY", 
+     xlab="QTY", 
+     col="green", 
+     breaks=50)
+
+# Create a data frame from the combined data for plotting
+longData <- data.frame(value = c(combined_data$sessions, combined_data$transactions, 
+                                 combined_data$QTY),
+                       category = factor(rep(c("Sessions", "Transactions", "QTY"), 
+                                             each = nrow(combined_data))))
+
+# Using ggplot2 to create overlapping histograms for a better understanding of 
+# the distribution
+ggplot(longData, aes(x = value, fill = category)) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 50, color = "black") +
+  scale_fill_manual(values = c("blue", "red", "green")) +
+  labs(title = "Overlapping Histograms of Sessions, Transactions, and QTY",
+       x = "Value",
+       y = "Frequency") +
+  theme_minimal()
+```
+
+The raw data appears to follow a poisson distribution, 
+because the data is independent and clustered near the origin.
+
+
+```{r, include=TRUE}
+# The next three variables will be depicted with histograms where 
+# x-axis == category and y-axis == frequency
+
+# Bar plot for dim_browser
+ggplot(combined_data, aes(x = dim_browser)) +
+  geom_bar(fill = "darkgreen") +
+  theme_minimal() +
+  labs(title = "Count of Sessions by Browser",
+       x = "Browser",
+       y = "Count") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,
+                                   family = "Helvetica", 
+                                     size = 6.5)) 
+# Rotate x labels for better readability
+```
+
+```{r, include=TRUE}
+
+# Time Series Plot for dim_date 
+print(ggplot(combined_data, aes(x = dim_date, y = sessions)) +  
+    geom_line() +
+    labs(title = "Time Series of Sessions by Date",
+         x = "Date",
+         y = "Sessions") +
+    theme_minimal())
+
+# Bar Plot for Ordinal Variable dim_month
+print(ggplot(combined_data, aes(x = dim_month)) +
+    geom_bar(fill = "lightblue", color = "black") +
+    labs(title = "Frequency of Data by Month",
+         x = "Month",
+         y = "Frequency") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    theme_minimal())
+
+```
+Here we see that March through June were on average ideal for website engagement 
+and that there was an unpredictable timeline of session count through this year.
+
+
+## 4. Aggregation
+```{r, include=TRUE}
+# Aggregate data by Month and Device for sheet one including Sessions, 
+# Transactions, QTY, and ECR
+monthDevice <- combined_data %>%
+  group_by(dim_month, dim_deviceCategory) %>%
+  summarise(
+    Sessions = sum(sessions), #total number of sessions for each group
+    Transactions = sum(transactions), #total number of transactions for each group
+    QTY = sum(QTY), #total QTY for each group
+    ECR = sum(transactions) / sum(sessions), 
+    .groups = 'drop'  # This drops the grouping structure
+  )
+
+# Plotting Transactions by Month and Device
+monDevTrans <- ggplot(monthDevice, aes(x = dim_month, y = Transactions, fill 
+                                       = dim_deviceCategory)) +
+  geom_bar(stat = "identity",  position 
+           = position_dodge(width = 0.5), color = "black") +
+  labs(title = "Transactions by Month and Device", x = "Month", 
+       y = "Transactions") +
+  theme_minimal()
+
+# Plotting QTY by Month and Device
+monDevQTY <- ggplot(monthDevice, 
+                    aes(x = dim_month, y = QTY, fill = dim_deviceCategory)) +
+  geom_bar(stat = "identity",  
+           position = position_dodge(width = 0.5), color = "black") +
+  labs(title = "QTY by Month and Device", x = "Month", y = "QTY") +
+  theme_minimal()
+
+# Plotting ECR by Month and Device
+monDevECR <- ggplot(monthDevice, aes(x = dim_month, y = ECR, fill 
+                                     = dim_deviceCategory)) +
+  geom_bar(stat = "identity",  position = position_dodge(width = 0.5), color 
+           = "black") +
+  labs(title = "ECR (E-commerce Conversion Rate) by Month and Device", 
+       x = "Month", y = "ECR") +
+  theme_minimal()
+
+# Plotting Sessions by Month and Device
+monDevSes <- ggplot(monthDevice, aes(x = dim_month, y = Sessions, 
+                                     fill = dim_deviceCategory)) +
+  geom_bar(stat = "identity",  position = position_dodge(width = 0.5), 
+           color = "black") +
+  labs(title = "Sessions by Month and Device", x = "Month", y = "Sessions") +
+  theme_minimal()
+
+monDevECR
+monDevQTY
+monDevSes
+monDevTrans
+
+```
+From this data we glean that the desktop is the most popular device across the 
+board for website engagement. Tablet and phone fight for second place- implying
+a necessity for more mobile-friendly business adjustments.
+
+
+
+
+```{r, include=TRUE}
+
+# Create month over month comparison for second sheet over the two most
+# recent months the most recent month’s value, the prior month’s value, 
+# and both the absolute and relative differences between them
+
+combined_data <- combined_data %>%
+  mutate(date = as.Date(dim_date, format = "%m/%d/%y"))  # Convert to Date object
+summary(combined_data)
+
+# Filter for May and June 2013, the most recent months in the dataset
+momData <- combined_data %>%
+  filter(format(date, "%m%Y") %in% c("052013", "062013"))
+
+# Group the metrics by month
+momDataN <- momData %>%
+  group_by(dim_month, dim_year) %>%
+    summarise( 
+      Total_Sessions = sum(sessions),
+      Total_Transactions = sum(transactions),
+      Total_QTY = sum(QTY),
+      Total_ECR = sum(ECR),
+      Total_Adds = sum(addsToCart),
+      .groups = 'drop')
+
+# Find the Absolute differences by taking the difference by month
+differences <- momDataN %>%
+              mutate('Sessions Absolute Difference' = Total_Sessions[2] 
+                                                        - Total_Sessions[1],
+                     'Transactions Absolute Difference' = Total_Transactions[2] 
+                                                        - Total_Transactions[1],
+                     'QTY Absolute Difference' = Total_QTY[2] 
+                                                        - Total_QTY[1],
+                     'ECR Absolute Difference' = Total_ECR[2]
+                                                        -Total_ECR[1],
+                     'Adds to Cart Absolute Difference'=  Total_Adds[2] 
+                                                        - Total_Adds[1],
+                     )
+
+#Find Relative Differences
+momComparison <- differences %>%
+              mutate('Sessions Relative Difference' = (Total_Sessions[2]
+                                                       - Total_Sessions[1])
+                                                            /Total_Sessions[1],
+                     'Transactions Relative Difference' = (Total_Transactions[2] 
+                                                           - Total_Transactions[1])
+                                                            /Total_Transactions[1],
+                     'QTY Relative Difference' = (Total_QTY[2] 
+                                                  - Total_QTY[1])
+                                                            /Total_QTY[1],
+                     'ECR Relative Difference' = (Total_ECR[2]
+                                                  -Total_ECR[1])/Total_ECR[1],
+                     'Adds to Cart Relative Difference'=  (Total_Adds[2] 
+                                                           - Total_Adds[1])
+                                                                /Total_Adds[1],
+                     )
+momComparison
+
+# Reshape data using pivot_longer
+data_long <- momComparison %>% 
+  pivot_longer(
+    cols = ends_with("Difference"), 
+    names_to = "Metric_Type", 
+    values_to = "Difference_Value"
+  )
+# Split data into absolute and relative for easier plotting
+absolute_data <- data_long %>% filter(str_detect(Metric_Type, "Absolute"))
+relative_data <- data_long %>% filter(str_detect(Metric_Type, "Relative"))
+
+# Plotting Absolute Differences
+ggplot(absolute_data, aes(x = Metric_Type, y = Difference_Value, fill = Metric_Type)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(title = "Absolute Differences",
+       x = "Metrics",
+       y = "Absolute Difference") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Plotting Relative Differences
+ggplot(relative_data, aes(x = Metric_Type, y = Difference_Value, fill = Metric_Type)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(title = "Relative Differences",
+       x = "Metrics",
+       y = "Relative Difference") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+We see an uptick in transactions and quantity of items bought but a decrease in 
+adds to cart over the month. This finding is counter-intuitive but may not be a 
+negative trait.
+
+## 5. Save Output to Disk
+Now it's time to create our two sheet Excel file.
+```{r, include=TRUE}
+# To create the desired worksheets for our Excel file:
+
+# Initialize new Workbook
+wb <- createWorkbook()
+
+#Add Worksheets
+addWorksheet(wb, "Month with Device")
+addWorksheet(wb, "Month over Month Comparison")
+
+# Write data to the sheets
+writeData(wb, sheet = "Month with Device", monthDevice)
+writeData(wb, sheet = "Month over Month Comparison", momComparison)
+
+# Save the workbook
+saveWorkbook(wb, "IXIS_Data_Science_Challenge.xlsx", overwrite = TRUE)
+
+```
+
+## 5. Conclusion
+The analysis of user engagement patterns across different browsers and devices highlights several key insights. 
+
+* Desktop usage remains the most popular for website interactions, with Safari and Chrome on desktops showing strong performance in engagement and transactions, respectively. 
+* Seasonal trends indicate that March through June are peak months for user activity. Despite an increase in transactions, there is a notable decline in cart additions, suggesting more decisive purchasing behavior. 
+* The data's Poisson-like distribution points to the independence of events and their concentration near the origin, providing a basis for further predictive modeling. 
+
+These insights should inform strategic enhancements, particularly in optimizing for device-specific experiences and adapting to user behavior trends. 
